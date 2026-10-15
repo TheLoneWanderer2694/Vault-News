@@ -1,0 +1,1581 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBS Real-World News Overlay & Control Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- QRCode.js Library for high-res stream QR rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=Oswald:wght@500;700&family=Orbitron:wght@600;800;900&family=Roboto+Mono:wght@500;700&family=Merriweather:wght@700;900&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        condensed: ['Oswald', 'sans-serif'],
+                        tech: ['Orbitron', 'sans-serif'],
+                        mono: ['Roboto Mono', 'monospace'],
+                        serif: ['Merriweather', 'serif'],
+                    },
+                    animation: {
+                        'pulse-fast': 'pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* OBS Transparent Standalone Mode */
+        body.obs-mode {
+            background-color: transparent !important;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* Ticker smooth infinite scroll */
+        .ticker-wrap {
+            width: 100%;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        .ticker-move {
+            display: inline-block;
+            white-space: nowrap;
+            animation-name: tickerAnim;
+            animation-timing-function: linear;
+            animation-iteration-count: infinite;
+        }
+
+        @keyframes tickerAnim {
+            0% { transform: translate3d(0, 0, 0); }
+            100% { transform: translate3d(-50%, 0, 0); }
+        }
+
+        /* Glassmorphism styling */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.88);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .glass-broadcast {
+            background: rgba(10, 15, 30, 0.95);
+            backdrop-filter: blur(20px);
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+        ::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.5); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.8); }
+
+        /* Crisp QR Canvas Rendering */
+        #qrcode-canvas img, #qrcode-canvas canvas,
+        #qrcode-canvas-zoom img, #qrcode-canvas-zoom canvas {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            display: block;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans antialiased text-slate-100 selection:bg-red-500 selection:text-white">
+
+    <!-- ========================================== -->
+    <!--      OBS STANDALONE BROADCAST OVERLAY      -->
+    <!-- ========================================== -->
+    <div id="obs-overlay-container" class="hidden fixed inset-0 w-full h-full pointer-events-none z-50 flex flex-col justify-end p-4 md:p-8">
+        <div id="overlay-wrapper" class="w-full max-w-7xl mx-auto transition-all duration-500 pointer-events-auto">
+            <!-- Dynamic Real-World News Rendered Here -->
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!--      MAIN DASHBOARD CONTROL INTERFACE      -->
+    <!-- ========================================== -->
+    <div id="dashboard-container" class="flex-1 flex flex-col h-full overflow-hidden">
+        
+        <!-- Header Nav -->
+        <header class="bg-slate-900/90 border-b border-slate-800 px-6 py-3 flex items-center justify-between shrink-0 shadow-lg">
+            <div class="flex items-center space-x-3">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-red-600 via-red-500 to-amber-500 flex items-center justify-center text-white font-black text-lg shadow-md shadow-red-900/40">
+                    <i class="fa-solid fa-newspaper animate-pulse"></i>
+                </div>
+                <div>
+                    <h1 class="text-base font-extrabold tracking-tight text-white flex items-center gap-2">
+                        OBS News Studio
+                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+                            <i class="fa-solid fa-robot"></i> Streamer.bot Ready
+                        </span>
+                    </h1>
+                    <p class="text-xs text-slate-400">Stream real-world news, post links to Twitch/YT/Kick chat via Streamer.bot & render QR codes</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-3">
+                <!-- Streamer.bot Connection Badge -->
+                <div id="sb-status-badge" class="px-3 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700 text-xs font-bold flex items-center gap-2 text-slate-400">
+                    <span id="sb-status-dot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+                    <span id="sb-status-text">Streamer.bot Offline</span>
+                </div>
+
+                <button onclick="toggleDashboardPreviewFullScreen()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-expand"></i> Clean Viewport
+                </button>
+                <button onclick="copyOBSUrl()" class="px-4 py-2 rounded-lg bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white font-bold text-xs shadow-lg shadow-red-900/40 border border-red-400/30 transition flex items-center gap-2">
+                    <i class="fa-solid fa-link"></i> Copy OBS Link
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Workspace (Grid layout) -->
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
+            
+            <!-- LEFT PANEL: Controls & Settings (5 Cols) -->
+            <div class="lg:col-span-5 bg-slate-900/70 border-r border-slate-800 flex flex-col h-full overflow-hidden">
+                
+                <!-- Tab Navigation -->
+                <div class="flex border-b border-slate-800 bg-slate-950/60 p-1.5 gap-1 shrink-0">
+                    <button onclick="switchTab('topic')" id="tab-btn-topic" class="tab-btn active flex-1 py-2 px-2 text-xs font-semibold rounded-md transition bg-slate-800 text-white shadow flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-rss text-orange-400"></i> Topics
+                    </button>
+                    <button onclick="switchTab('streamerbot')" id="tab-btn-streamerbot" class="tab-btn flex-1 py-2 px-2 text-xs font-semibold rounded-md transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-robot text-purple-400"></i> Streamer.bot
+                    </button>
+                    <button onclick="switchTab('style')" id="tab-btn-style" class="tab-btn flex-1 py-2 px-2 text-xs font-semibold rounded-md transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-qrcode text-emerald-400"></i> QR & Style
+                    </button>
+                    <button onclick="switchTab('obs')" id="tab-btn-obs" class="tab-btn flex-1 py-2 px-2 text-xs font-semibold rounded-md transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-display text-blue-400"></i> OBS Link
+                    </button>
+                </div>
+
+                <!-- Tab Panels Container -->
+                <div class="flex-1 overflow-y-auto p-5 space-y-6">
+
+                    <!-- TAB 1: TOPICS & LIVE NEWS FETCHING -->
+                    <div id="tab-panel-topic" class="tab-panel space-y-5">
+                        
+                        <!-- Custom Topic Search Query Card -->
+                        <div class="bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 p-4 rounded-xl border border-red-500/30 space-y-3 shadow-lg">
+                            <label class="block text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center justify-between">
+                                <span><i class="fa-solid fa-magnifying-glass text-amber-400 mr-1.5"></i> Custom Topic Search Query</span>
+                                <span class="text-[10px] text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/30">Multi-Proxy Engine</span>
+                            </label>
+                            
+                            <form onsubmit="event.preventDefault(); fetchCustomTopicNews();" class="flex gap-2">
+                                <input type="text" id="custom-topic-input" placeholder="e.g. Artificial Intelligence, SpaceX, Formula 1, Crypto" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500">
+                                <button type="submit" id="btn-search-topic" class="px-4 py-2 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0 shadow-md">
+                                    <i class="fa-solid fa-bolt"></i> Fetch Topic
+                                </button>
+                            </form>
+                            <p class="text-[11px] text-slate-400">Queries Google News RSS & global outlets via auto-fallback proxy.</p>
+                        </div>
+
+                        <!-- Preset Category Feeds -->
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2.5">
+                                <i class="fa-solid fa-globe text-blue-400 mr-1.5"></i> Category Presets
+                            </label>
+                            <div class="grid grid-cols-3 gap-2">
+                                <button onclick="selectCategory('world')" id="cat-btn-world" class="cat-btn p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-xs font-bold text-slate-200 transition text-center">
+                                    <i class="fa-solid fa-earth-americas block text-base mb-1 text-blue-400"></i> World
+                                </button>
+                                <button onclick="selectCategory('tech')" id="cat-btn-tech" class="cat-btn p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-xs font-bold text-slate-200 transition text-center">
+                                    <i class="fa-solid fa-microchip block text-base mb-1 text-cyan-400"></i> Technology
+                                </button>
+                                <button onclick="selectCategory('gaming')" id="cat-btn-gaming" class="cat-btn p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-xs font-bold text-slate-200 transition text-center">
+                                    <i class="fa-solid fa-gamepad block text-base mb-1 text-purple-400"></i> Gaming
+                                </button>
+                                <button onclick="selectCategory('business')" id="cat-btn-business" class="cat-btn p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-xs font-bold text-slate-200 transition text-center">
+                                    <i class="fa-solid fa-chart-line block text-base mb-1 text-emerald-400"></i> Business
+                                </button>
+                                <button onclick="selectCategory('crypto')" id="cat-btn-crypto" class="cat-btn p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-xs font-bold text-slate-200 transition text-center">
+                                    <i class="fa-solid fa-coins block text-base mb-1 text-amber-400"></i> Crypto
+                                </button>
+                                <button onclick="selectCategory('sports')" id="cat-btn-sports" class="cat-btn p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-xs font-bold text-slate-200 transition text-center">
+                                    <i class="fa-solid fa-trophy block text-base mb-1 text-red-400"></i> Sports
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Manual Headline Addition -->
+                        <div class="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-300">
+                                <i class="fa-solid fa-pen-to-square text-emerald-400 mr-1.5"></i> Add Custom Headline
+                            </label>
+                            <div class="space-y-2">
+                                <input type="text" id="manual-title-input" placeholder="Enter custom headline text..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500">
+                                <div class="flex gap-2">
+                                    <input type="text" id="manual-source-input" placeholder="Source (e.g. BREAKING)" class="w-1/3 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none">
+                                    <input type="text" id="manual-url-input" placeholder="Article Link URL (optional)" class="w-2/3 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none">
+                                </div>
+                                <button onclick="addManualHeadline()" class="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5">
+                                    <i class="fa-solid fa-plus"></i> Add Headline
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Active Headlines List -->
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-bold uppercase tracking-wider text-slate-300">Active Headlines</span>
+                                    <span id="headline-count-badge" class="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] font-mono text-amber-400 font-bold border border-slate-700">0 Items</span>
+                                </div>
+                                <span id="last-refreshed-time" class="text-[10px] font-mono text-slate-500">Refreshed: Just now</span>
+                            </div>
+
+                            <div id="headlines-editor-list" class="space-y-2 max-h-[240px] overflow-y-auto pr-1">
+                                <!-- Dynamic News Headlines Rendered via JS -->
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- TAB 2: STREAMER.BOT WEBSOCKET INTEGRATION -->
+                    <div id="tab-panel-streamerbot" class="tab-panel hidden space-y-5">
+                        
+                        <!-- WebSocket Server Card -->
+                        <div class="bg-gradient-to-br from-purple-950/40 via-slate-950 to-slate-900 p-4 rounded-xl border border-purple-500/30 space-y-4 shadow-lg">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <i class="fa-solid fa-plug text-purple-400 text-lg"></i>
+                                    <span class="text-xs font-bold uppercase tracking-wider text-white">Streamer.bot Connection</span>
+                                </div>
+                                <span id="sb-card-status" class="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">Disconnected</span>
+                            </div>
+
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Connect to Streamer.bot's built-in WebSocket server to automatically post live article links into Twitch, YouTube, or Kick chat whenever news updates on screen.
+                            </p>
+
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-[11px] font-bold text-slate-300 mb-1">WebSocket URL</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="sb-ws-url" value="ws://127.0.0.1:8080/" placeholder="ws://127.0.0.1:8080/" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-purple-300 font-mono focus:outline-none focus:border-purple-500">
+                                        <button onclick="connectStreamerBot()" id="btn-sb-connect" class="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition shrink-0">
+                                            Connect
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Auto-Post Toggle Switch -->
+                                <div class="flex items-center justify-between bg-slate-900/90 p-3 rounded-lg border border-slate-800">
+                                    <div>
+                                        <span class="text-xs font-bold text-white block">Auto-Send Links to Stream Chat</span>
+                                        <span class="text-[11px] text-slate-400">Triggers chat broadcast on headline rotation</span>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="sb-autopost-toggle" onchange="updateSettings()" class="sr-only peer" checked>
+                                        <div class="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-600"></div>
+                                    </label>
+                                </div>
+
+                                <!-- Chat Platform Target -->
+                                <div>
+                                    <label class="block text-[11px] font-bold text-slate-300 mb-1">Target Chat Platform</label>
+                                    <select id="sb-target-platform" onchange="updateSettings()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                                        <option value="Twitch">Twitch Chat</option>
+                                        <option value="YouTube">YouTube Live Chat</option>
+                                        <option value="Kick">Kick Chat</option>
+                                        <option value="Discord">Discord Webhook / Channel</option>
+                                    </select>
+                                </div>
+
+                                <!-- Chat Message Template -->
+                                <div>
+                                    <label class="block text-[11px] font-bold text-slate-300 mb-1">
+                                        Chat Message Template 
+                                        <span class="text-[10px] text-slate-500 font-normal ml-1">(Variables: {title}, {source}, {url})</span>
+                                    </label>
+                                    <textarea id="sb-msg-template" rows="2" oninput="updateSettings()" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-purple-500">📰 [NEWS] {title} — Read full article: {url}</textarea>
+                                </div>
+
+                                <!-- Send Test Chat Message -->
+                                <button onclick="triggerStreamerBotTest()" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-purple-300 border border-purple-500/30 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2">
+                                    <i class="fa-solid fa-paper-plane"></i> Send Test Message to Streamer.bot
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- TAB 3: LAYOUT & VISUAL STYLING (WITH QR ZOOM CONTROLS) -->
+                    <div id="tab-panel-style" class="tab-panel hidden space-y-6">
+                        
+                        <!-- QR Code Size & Zoom Projection Card -->
+                        <div class="bg-gradient-to-br from-emerald-950/40 via-slate-950 to-slate-900 p-4 rounded-xl border border-emerald-500/30 space-y-3 shadow-lg">
+                            <div class="flex items-center justify-between">
+                                <label class="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+                                    <i class="fa-solid fa-qrcode text-base"></i> Stream QR Code Controls
+                                </label>
+                                <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Max Stream Readability</span>
+                            </div>
+
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                QR codes are auto-rendered at large, high-contrast resolution (140px+). Use <strong>Enlarge / Zoom Mode</strong> for compressed 720p/1080p stream feeds.
+                            </p>
+
+                            <!-- QR Toggle Switch & Zoom Button -->
+                            <div class="grid grid-cols-2 gap-2 pt-1">
+                                <div class="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 flex items-center justify-between">
+                                    <span class="text-xs font-bold text-white">Enable QR</span>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="cfg-showqr" onchange="updateSettings()" class="sr-only peer" checked>
+                                        <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                                    </label>
+                                </div>
+
+                                <button id="btn-toggle-qrzoom" onclick="toggleQRZoom()" class="p-2.5 rounded-lg border border-amber-500/40 bg-amber-950/40 hover:bg-amber-900/60 text-xs font-bold text-amber-300 transition flex items-center justify-center gap-1.5 shadow">
+                                    <i class="fa-solid fa-magnifying-glass-plus text-sm"></i>
+                                    <span id="qrzoom-btn-label">Enlarge / Zoom QR</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Presets -->
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2.5">
+                                <i class="fa-solid fa-wand-magic-sparkles mr-1.5 text-amber-400"></i> Broadcast Presets
+                            </label>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button onclick="applyPreset('cnn')" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-700 text-left transition group">
+                                    <div class="text-xs font-bold text-white group-hover:text-red-400 flex items-center justify-between">
+                                        TV Broadcast <span class="w-2 h-2 rounded-full bg-red-600"></span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-400 mt-0.5">Classic lower third banner</div>
+                                </button>
+                                <button onclick="applyPreset('cyber')" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-700 text-left transition group">
+                                    <div class="text-xs font-bold text-white group-hover:text-cyan-400 flex items-center justify-between">
+                                        Cyber Tech <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-400 mt-0.5">Neon accents & Orbitron font</div>
+                                </button>
+                                <button onclick="applyPreset('darkmodern')" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-700 text-left transition group">
+                                    <div class="text-xs font-bold text-white group-hover:text-emerald-400 flex items-center justify-between">
+                                        Dark Ticker <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-400 mt-0.5">Continuous marquee bar</div>
+                                </button>
+                                <button onclick="applyPreset('minimal')" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-700 text-left transition group">
+                                    <div class="text-xs font-bold text-white group-hover:text-slate-200 flex items-center justify-between">
+                                        Minimal Clean <span class="w-2 h-2 rounded-full bg-slate-200"></span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-400 mt-0.5">Unobtrusive stream widget</div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Mode Switcher -->
+                        <div>
+                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Overlay Display Mode</label>
+                            <div class="grid grid-cols-3 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                                <button id="mode-btn-lowerthird" onclick="setLayoutMode('lowerthird')" class="py-2 px-2 text-[11px] font-bold rounded-lg transition bg-red-600 text-white text-center">
+                                    Lower Third
+                                </button>
+                                <button id="mode-btn-ticker" onclick="setLayoutMode('ticker')" class="py-2 px-2 text-[11px] font-bold rounded-lg transition text-slate-400 hover:text-white text-center">
+                                    Ticker Marquee
+                                </button>
+                                <button id="mode-btn-dual" onclick="setLayoutMode('dual')" class="py-2 px-2 text-[11px] font-bold rounded-lg transition text-slate-400 hover:text-white text-center">
+                                    Dual Combo
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Additional Customization Controls -->
+                        <div class="space-y-4 pt-2 border-t border-slate-800">
+                            
+                            <!-- Display Direct URL Toggle -->
+                            <div class="flex items-center justify-between bg-slate-800/40 p-3 rounded-lg border border-slate-800">
+                                <div>
+                                    <span class="text-xs font-bold text-white block">Display Real Article URL Badge</span>
+                                    <span class="text-[11px] text-slate-400">Shows post domain on stream overlay</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="cfg-showlink" onchange="updateSettings()" class="sr-only peer" checked>
+                                    <div class="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600"></div>
+                                </label>
+                            </div>
+
+                            <!-- Live Pulse Badge Toggle -->
+                            <div class="flex items-center justify-between bg-slate-800/40 p-3 rounded-lg border border-slate-800">
+                                <div>
+                                    <span class="text-xs font-bold text-white block">Live Pulse Badge</span>
+                                    <span class="text-[11px] text-slate-400">Pulsing indicator tag</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="cfg-breaking" onchange="updateSettings()" class="sr-only peer" checked>
+                                    <div class="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600"></div>
+                                </label>
+                            </div>
+
+                            <!-- Live Clock Toggle -->
+                            <div class="flex items-center justify-between bg-slate-800/40 p-3 rounded-lg border border-slate-800">
+                                <div>
+                                    <span class="text-xs font-bold text-white block">Display Real-time Clock</span>
+                                    <span class="text-[11px] text-slate-400">Local time widget badge</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="cfg-showclock" onchange="updateSettings()" class="sr-only peer" checked>
+                                    <div class="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600"></div>
+                                </label>
+                            </div>
+
+                            <!-- Color Accent & Category Label -->
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-300 mb-1">Accent Color</label>
+                                    <div class="flex items-center gap-2">
+                                        <input type="color" id="cfg-color-accent" value="#dc2626" onchange="updateSettings()" class="w-8 h-8 rounded border-0 bg-transparent cursor-pointer shrink-0">
+                                        <input type="text" id="cfg-color-accent-hex" value="#dc2626" onchange="document.getElementById('cfg-color-accent').value=this.value; updateSettings()" class="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-white font-mono uppercase">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-300 mb-1">Badge Header Label</label>
+                                    <input type="text" id="cfg-category-label" value="BREAKING NEWS" oninput="updateSettings()" class="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white font-bold uppercase">
+                                </div>
+                            </div>
+
+                            <!-- Speed Slider -->
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span class="font-semibold text-slate-300">Ticker Scroll Speed</span>
+                                    <span id="speed-val-display" class="font-mono text-red-400">25s</span>
+                                </div>
+                                <input type="range" id="cfg-speed" min="10" max="60" value="25" oninput="document.getElementById('speed-val-display').innerText = this.value + 's'; updateSettings()" class="w-full accent-red-500 bg-slate-950 h-2 rounded-lg cursor-pointer">
+                            </div>
+
+                            <!-- Font Family -->
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-300 mb-1">Typography Style</label>
+                                <select id="cfg-font" onchange="updateSettings()" class="w-full bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-xs text-white">
+                                    <option value="font-sans">Standard Modern (Inter)</option>
+                                    <option value="font-condensed">Broadcast Condensed (Oswald)</option>
+                                    <option value="font-tech">Cyber Tech (Orbitron)</option>
+                                    <option value="font-mono">Terminal Digital (Roboto Mono)</option>
+                                    <option value="font-serif">Classic Editorial (Merriweather)</option>
+                                </select>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    <!-- TAB 4: OBS LINK & SETUP GUIDE -->
+                    <div id="tab-panel-obs" class="tab-panel hidden space-y-5">
+                        
+                        <div class="bg-gradient-to-br from-red-950/40 to-slate-900 border border-red-500/30 rounded-xl p-4 space-y-3">
+                            <div class="flex items-center gap-2 text-red-400 font-bold text-sm">
+                                <i class="fa-solid fa-link text-base"></i> Dynamic OBS Browser URL
+                            </div>
+                            <p class="text-xs text-slate-300 leading-relaxed">
+                                Paste this link into your OBS Browser Source. It preserves live news updates, search queries, article URLs, Streamer.bot config, and enlarged QR modes.
+                            </p>
+                            
+                            <div class="relative">
+                                <input type="text" id="obs-generated-url" readonly class="w-full bg-slate-950 border border-slate-700 text-red-300 font-mono text-[11px] rounded-lg p-2.5 pr-20 select-all">
+                                <button onclick="copyOBSUrl()" class="absolute right-1 top-1 bottom-1 px-3 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded transition flex items-center gap-1">
+                                    <i class="fa-solid fa-copy"></i> Copy
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Step-by-Step Setup -->
+                        <div class="bg-slate-950/80 p-4 rounded-xl border border-slate-800 space-y-3">
+                            <h3 class="text-xs font-bold uppercase text-white flex items-center gap-2">
+                                <i class="fa-solid fa-sliders text-red-500"></i> How to add in OBS Studio
+                            </h3>
+                            
+                            <ul class="space-y-2.5 text-xs text-slate-300">
+                                <li class="flex items-start gap-2.5">
+                                    <span class="bg-red-500/20 text-red-400 rounded-full w-5 h-5 flex items-center justify-center shrink-0 text-[10px] font-bold mt-0.5">1</span>
+                                    <span>In OBS, click <strong>+ (Add Source)</strong> &rarr; Select <strong>Browser</strong>.</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <span class="bg-red-500/20 text-red-400 rounded-full w-5 h-5 flex items-center justify-center shrink-0 text-[10px] font-bold mt-0.5">2</span>
+                                    <span>Paste the copied link into the <strong>URL</strong> field.</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <span class="bg-red-500/20 text-red-400 rounded-full w-5 h-5 flex items-center justify-center shrink-0 text-[10px] font-bold mt-0.5">3</span>
+                                    <span>Set Width: <strong>1920</strong> and Height: <strong>1080</strong>.</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <!-- Launch Test Tab -->
+                        <div class="pt-2">
+                            <a id="btn-test-standalone" href="#" target="_blank" class="block w-full py-2.5 text-center bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg font-semibold text-xs transition">
+                                <i class="fa-solid fa-arrow-up-right-from-square mr-1.5"></i> Test Transparent Overlay in New Tab
+                            </a>
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- RIGHT PANEL: Live Preview Canvas (7 Cols) -->
+            <div id="preview-canvas-container" class="lg:col-span-7 bg-slate-950 flex flex-col relative overflow-hidden justify-between p-6 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:16px_16px]">
+                
+                <!-- Preview Top Bar -->
+                <div class="flex items-center justify-between shrink-0 mb-4 z-10">
+                    <div class="flex items-center space-x-2">
+                        <span class="relative flex h-2.5 w-2.5">
+                          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                        </span>
+                        <span class="text-xs font-bold tracking-wider uppercase text-slate-300">Live OBS Stream Viewport (16:9)</span>
+                    </div>
+
+                    <!-- Background Toggle for Stream Preview -->
+                    <div class="flex items-center space-x-1.5 bg-slate-900 border border-slate-800 rounded-lg p-1">
+                        <button onclick="setPreviewBg('game')" id="bg-btn-game" class="px-2.5 py-1 text-[11px] font-semibold rounded bg-slate-800 text-white">Stream BG</button>
+                        <button onclick="setPreviewBg('grid')" id="bg-btn-grid" class="px-2.5 py-1 text-[11px] font-semibold rounded text-slate-400 hover:text-white">Dark Grid</button>
+                    </div>
+                </div>
+
+                <!-- Simulated OBS Screen canvas -->
+                <div id="simulated-obs-screen" class="relative w-full aspect-video rounded-xl overflow-hidden border border-slate-800 shadow-2xl transition-all flex flex-col justify-end p-4 md:p-8 bg-cover bg-center" style="background-image: url('https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1200&q=80');">
+                    
+                    <div id="simulated-bg-overlay" class="absolute inset-0 bg-slate-950/20 pointer-events-none"></div>
+
+                    <!-- Live Rendered Overlay -->
+                    <div id="preview-overlay-render" class="relative z-10 w-full transition-all duration-300">
+                        <!-- Rendered by JS -->
+                    </div>
+
+                </div>
+
+                <!-- Bottom Status Indicator -->
+                <div class="flex items-center justify-between text-xs text-slate-500 shrink-0 mt-4 z-10">
+                    <div class="flex items-center gap-2">
+                        <i class="fa-solid fa-satellite-dish text-amber-500 animate-pulse"></i>
+                        <span id="status-feed-label">Ready: Multi-proxy RSS engine active</span>
+                    </div>
+                    <span class="font-mono text-[11px] text-slate-600">1920 x 1080 Canvas</span>
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast-message" class="fixed bottom-6 right-6 transform translate-y-20 opacity-0 bg-slate-900 border border-emerald-500/50 text-white px-4 py-3 rounded-xl shadow-2xl transition-all duration-300 flex items-center gap-3 z-50">
+        <i class="fa-solid fa-circle-check text-emerald-400 text-lg"></i>
+        <span id="toast-text" class="text-xs font-semibold">OBS URL copied to clipboard!</span>
+    </div>
+
+    <!-- ========================================== -->
+    <!--            JAVASCRIPT CORE ENGINE          -->
+    <!-- ========================================== -->
+    <script>
+        // Preset Real-World RSS Feeds Mapping
+        const CATEGORY_FEEDS = {
+            world: [
+                { name: "BBC News", url: "https://feeds.bbci.co.uk/news/world/rss.xml" },
+                { name: "NY Times", url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml" }
+            ],
+            tech: [
+                { name: "TechCrunch", url: "https://techcrunch.com/feed/" },
+                { name: "The Verge", url: "https://www.theverge.com/rss/index.xml" }
+            ],
+            gaming: [
+                { name: "IGN", url: "https://feeds.feedburner.com/ign/news" },
+                { name: "Kotaku", url: "https://kotaku.com/rss" }
+            ],
+            business: [
+                { name: "CNBC", url: "https://www.cnbc.com/id/100003114/device/rss/rss.html" }
+            ],
+            crypto: [
+                { name: "CoinDesk", url: "https://www.coindesk.com/arc/outboundfeeds/rss/" }
+            ],
+            sports: [
+                { name: "ESPN", url: "https://www.espn.com/espn/rss/news" }
+            ]
+        };
+
+        // Application State
+        const state = {
+            activeCategory: 'world',
+            customQuery: '',
+            layoutMode: 'lowerthird', // 'lowerthird', 'ticker', or 'dual'
+            showBreaking: true,
+            showClock: true,
+            showLink: true,
+            showQR: true,
+            qrZoom: false,           // Controls Enlarge/Zoom QR mode
+            accentColor: '#dc2626',
+            categoryLabel: 'BREAKING NEWS',
+            speed: 25,
+            fontStyle: 'font-sans',
+            headlines: [],
+            // Streamer.bot state
+            sbUrl: 'ws://127.0.0.1:8080/',
+            sbAutoPost: true,
+            sbPlatform: 'Twitch',
+            sbMsgTemplate: '📰 [NEWS] {title} — Read full article: {url}'
+        };
+
+        let activeHeadlineIndex = 0;
+        let headlineRotateTimer = null;
+        let sbSocket = null;
+        let sbConnected = false;
+
+        // On DOM Load
+        window.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            
+            // Check if loaded inside OBS Studio Browser Source
+            if (urlParams.get('obs') === 'true' || window.location.hash.includes('obs=true')) {
+                enableOBSStandaloneMode(urlParams);
+            } else {
+                initDashboard();
+            }
+        });
+
+        // -------------------------------------------------------------
+        // STREAMER.BOT WEBSOCKET CLIENT
+        // -------------------------------------------------------------
+        function connectStreamerBot() {
+            const urlInput = document.getElementById('sb-ws-url');
+            if (urlInput) state.sbUrl = urlInput.value.trim() || 'ws://127.0.0.1:8080/';
+
+            updateSBStatusBadge('connecting');
+
+            try {
+                if (sbSocket) sbSocket.close();
+                sbSocket = new WebSocket(state.sbUrl);
+
+                sbSocket.onopen = () => {
+                    sbConnected = true;
+                    updateSBStatusBadge('connected');
+                    showToast("Connected to Streamer.bot WebSocket Server!");
+                };
+
+                sbSocket.onclose = () => {
+                    sbConnected = false;
+                    updateSBStatusBadge('disconnected');
+                };
+
+                sbSocket.onerror = (err) => {
+                    sbConnected = false;
+                    updateSBStatusBadge('disconnected');
+                    console.warn("Streamer.bot WS Error:", err);
+                };
+
+            } catch (e) {
+                sbConnected = false;
+                updateSBStatusBadge('disconnected');
+            }
+        }
+
+        function updateSBStatusBadge(status) {
+            const badgeDot = document.getElementById('sb-status-dot');
+            const badgeText = document.getElementById('sb-status-text');
+            const cardStatus = document.getElementById('sb-card-status');
+
+            if (status === 'connected') {
+                if (badgeDot) badgeDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+                if (badgeText) badgeText.innerText = "Streamer.bot Connected";
+                if (cardStatus) {
+                    cardStatus.innerText = "Connected";
+                    cardStatus.className = "text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-500/30";
+                }
+            } else if (status === 'connecting') {
+                if (badgeDot) badgeDot.className = "w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping";
+                if (badgeText) badgeText.innerText = "Connecting...";
+                if (cardStatus) {
+                    cardStatus.innerText = "Connecting...";
+                    cardStatus.className = "text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-950 text-amber-400 border border-amber-500/30";
+                }
+            } else {
+                if (badgeDot) badgeDot.className = "w-2.5 h-2.5 rounded-full bg-slate-500";
+                if (badgeText) badgeText.innerText = "Streamer.bot Offline";
+                if (cardStatus) {
+                    cardStatus.innerText = "Disconnected";
+                    cardStatus.className = "text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
+                }
+            }
+        }
+
+        function broadcastHeadlineMessageToStreamerBot(headline) {
+            if (!sbSocket || sbSocket.readyState !== WebSocket.OPEN) return;
+
+            const msgText = state.sbMsgTemplate
+                .replace('{title}', headline.text || '')
+                .replace('{source}', headline.source || '')
+                .replace('{url}', headline.link || '')
+                .replace('{category}', state.categoryLabel || '');
+
+            // Construct Streamer.bot DoAction / SendMessage payload
+            const payload = {
+                request: "DoAction",
+                action: {
+                    name: "Send News Article Link"
+                },
+                args: {
+                    newsTitle: headline.text,
+                    newsSource: headline.source,
+                    newsUrl: headline.link,
+                    chatMessage: msgText,
+                    targetPlatform: state.sbPlatform
+                },
+                id: "obs-news-overlay-" + Date.now()
+            };
+
+            sbSocket.send(JSON.stringify(payload));
+        }
+
+        function triggerStreamerBotTest() {
+            if (!sbConnected) {
+                showToast("Please connect to Streamer.bot first!");
+                return;
+            }
+
+            const testHeadline = state.headlines[0] || {
+                text: "Sample Stream Breaking News Story",
+                source: "TEST",
+                link: "https://news.google.com"
+            };
+
+            broadcastHeadlineMessageToStreamerBot(testHeadline);
+            showToast(`Broadcast test sent to Streamer.bot (${state.sbPlatform})!`);
+        }
+
+        // -------------------------------------------------------------
+        // OBS STANDALONE MODE LOGIC
+        // -------------------------------------------------------------
+        async function enableOBSStandaloneMode(params) {
+            document.body.classList.add('obs-mode');
+            document.getElementById('dashboard-container').classList.add('hidden');
+            
+            const overlayContainer = document.getElementById('obs-overlay-container');
+            overlayContainer.classList.remove('hidden');
+
+            // Parse settings from URL parameters
+            if (params.get('mode')) state.layoutMode = params.get('mode');
+            if (params.get('cat')) state.activeCategory = params.get('cat');
+            if (params.get('q')) state.customQuery = decodeURIComponent(params.get('q'));
+            if (params.get('breaking')) state.showBreaking = params.get('breaking') === 'true';
+            if (params.get('clock')) state.showClock = params.get('clock') === 'true';
+            if (params.get('showlink')) state.showLink = params.get('showlink') === 'true';
+            if (params.get('showqr')) state.showQR = params.get('showqr') === 'true';
+            if (params.get('qrZoom')) state.qrZoom = params.get('qrZoom') === 'true';
+            if (params.get('color')) state.accentColor = '#' + params.get('color');
+            if (params.get('label')) state.categoryLabel = decodeURIComponent(params.get('label'));
+            if (params.get('speed')) state.speed = parseInt(params.get('speed'));
+            if (params.get('font')) state.fontStyle = params.get('font');
+
+            // Streamer.bot params
+            if (params.get('sbUrl')) state.sbUrl = decodeURIComponent(params.get('sbUrl'));
+            if (params.get('sbAuto')) state.sbAutoPost = params.get('sbAuto') === 'true';
+            if (params.get('sbPlat')) state.sbPlatform = params.get('sbPlat');
+            if (params.get('sbTpl')) state.sbMsgTemplate = decodeURIComponent(params.get('sbTpl'));
+
+            // Auto connect to Streamer.bot in standalone mode
+            if (state.sbAutoPost) {
+                connectStreamerBot();
+            }
+
+            // Fetch Real-World News
+            await fetchRealWorldNews();
+
+            // Render & Start Timers
+            const wrapper = document.getElementById('overlay-wrapper');
+            renderOverlayMarkup(wrapper);
+            startClockUpdater();
+
+            if (state.layoutMode === 'lowerthird' || state.layoutMode === 'dual') {
+                startHeadlineRotation();
+            }
+        }
+
+        // -------------------------------------------------------------
+        // DASHBOARD INITIALIZATION & LOGIC
+        // -------------------------------------------------------------
+        async function initDashboard() {
+            updateCategoryButtons();
+            await fetchRealWorldNews();
+            updateSettings();
+            startClockUpdater();
+            connectStreamerBot();
+        }
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('bg-slate-800', 'text-white', 'shadow');
+                btn.classList.add('text-slate-400');
+            });
+
+            document.getElementById(`tab-panel-${tabId}`).classList.remove('hidden');
+            const activeBtn = document.getElementById(`tab-btn-${tabId}`);
+            activeBtn.classList.add('bg-slate-800', 'text-white', 'shadow');
+            activeBtn.classList.remove('text-slate-400');
+        }
+
+        function selectCategory(catKey) {
+            state.activeCategory = catKey;
+            state.customQuery = '';
+            document.getElementById('custom-topic-input').value = '';
+            
+            const labels = {
+                world: 'WORLD NEWS',
+                tech: 'TECH BREAKTHROUGHS',
+                gaming: 'GAMING & ESPORTS',
+                business: 'BUSINESS & MARKETS',
+                crypto: 'CRYPTO FEED',
+                sports: 'SPORTS HIGHLIGHTS'
+            };
+            if (labels[catKey]) {
+                state.categoryLabel = labels[catKey];
+                document.getElementById('cfg-category-label').value = labels[catKey];
+            }
+
+            updateCategoryButtons();
+            fetchRealWorldNews().then(() => updateSettings());
+        }
+
+        function updateCategoryButtons() {
+            document.querySelectorAll('.cat-btn').forEach(btn => {
+                btn.classList.remove('border-red-500', 'bg-red-950/60', 'text-white');
+                btn.classList.add('border-slate-700', 'bg-slate-800/80', 'text-slate-200');
+            });
+
+            const activeBtn = document.getElementById(`cat-btn-${state.activeCategory}`);
+            if (activeBtn) {
+                activeBtn.classList.remove('border-slate-700', 'bg-slate-800/80', 'text-slate-200');
+                activeBtn.classList.add('border-red-500', 'bg-red-950/60', 'text-white');
+            }
+        }
+
+        function fetchCustomTopicNews() {
+            const val = document.getElementById('custom-topic-input').value.trim();
+            if (!val) {
+                showToast("Please enter a topic or keyword to search!");
+                return;
+            }
+            state.customQuery = val;
+            state.activeCategory = 'custom';
+            state.categoryLabel = val.toUpperCase() + ' NEWS';
+            document.getElementById('cfg-category-label').value = state.categoryLabel;
+
+            updateCategoryButtons();
+            fetchRealWorldNews().then(() => updateSettings());
+        }
+
+        // -------------------------------------------------------------
+        // ROBUST MULTI-PROXY SEARCH ENGINE & RSS FETCHING
+        // -------------------------------------------------------------
+        async function fetchRealWorldNews() {
+            const statusLabel = document.getElementById('status-feed-label');
+            const searchBtn = document.getElementById('btn-search-topic');
+            
+            if (statusLabel) statusLabel.innerText = "Querying multi-proxy search engine...";
+            if (searchBtn) searchBtn.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> Fetching...`;
+
+            let items = [];
+
+            if (state.customQuery) {
+                const googleNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(state.customQuery)}&hl=en-US&gl=US&ceid=US:en`;
+                items = await fetchRSSViaMultiProxy(googleNewsUrl);
+
+                if (!items || items.length === 0) {
+                    console.log("Direct query empty, falling back to client-side keyword search...");
+                    items = await fetchAndFilterFeedsByKeyword(state.customQuery);
+                }
+            } else {
+                const feedList = CATEGORY_FEEDS[state.activeCategory] || CATEGORY_FEEDS.world;
+                const randomFeed = feedList[Math.floor(Math.random() * feedList.length)];
+                items = await fetchRSSViaMultiProxy(randomFeed.url);
+            }
+
+            if (items && items.length > 0) {
+                state.headlines = items.slice(0, 10).map((item, i) => ({
+                    id: Date.now() + i,
+                    text: cleanTitle(item.title),
+                    source: extractSource(item, state.customQuery ? state.customQuery.toUpperCase() : "LIVE NEWS"),
+                    link: item.link || item.guid || "https://news.google.com",
+                    pubDate: item.pubDate ? new Date(item.pubDate).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Live'
+                }));
+                showToast(`Loaded ${state.headlines.length} news items for "${state.customQuery || state.activeCategory}"!`);
+            } else {
+                fallbackTopicHeadlines(state.customQuery || state.activeCategory);
+            }
+
+            renderHeadlinesList();
+            if (statusLabel) {
+                statusLabel.innerText = `Active Feed: ${state.customQuery ? `Topic "${state.customQuery}"` : state.activeCategory.toUpperCase()} (${state.headlines.length} posts live)`;
+            }
+            if (searchBtn) searchBtn.innerHTML = `<i class="fa-solid fa-bolt"></i> Fetch Topic`;
+
+            const lastTimeEl = document.getElementById('last-refreshed-time');
+            if (lastTimeEl) {
+                const now = new Date();
+                lastTimeEl.innerText = `Refreshed: ${now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+            }
+        }
+
+        async function fetchRSSViaMultiProxy(targetRssUrl) {
+            // Proxy 1: rss2json
+            try {
+                const p1 = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(targetRssUrl)}`;
+                const res = await fetch(p1);
+                const data = await res.json();
+                if (data.status === 'ok' && data.items && data.items.length > 0) return data.items;
+            } catch (e) { console.warn("Proxy 1 failed", e); }
+
+            // Proxy 2: AllOrigins
+            try {
+                const p2 = `https://api.allorigins.win/get?url=${encodeURIComponent(targetRssUrl)}`;
+                const res = await fetch(p2);
+                const data = await res.json();
+                if (data.contents) {
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(data.contents, "text/xml");
+                    const xmlItems = Array.from(xmlDoc.querySelectorAll("item"));
+                    if (xmlItems.length > 0) {
+                        return xmlItems.map(item => ({
+                            title: item.querySelector("title")?.textContent || "",
+                            link: item.querySelector("link")?.textContent || item.querySelector("guid")?.textContent || "https://news.google.com",
+                            author: item.querySelector("dc\\:creator, creator, author")?.textContent || "NEWS",
+                            pubDate: item.querySelector("pubDate")?.textContent || ""
+                        }));
+                    }
+                }
+            } catch (e) { console.warn("Proxy 2 failed", e); }
+
+            // Proxy 3: CorsProxy.io
+            try {
+                const p3 = `https://corsproxy.io/?${encodeURIComponent(targetRssUrl)}`;
+                const res = await fetch(p3);
+                const xmlText = await res.text();
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+                const xmlItems = Array.from(xmlDoc.querySelectorAll("item"));
+                if (xmlItems.length > 0) {
+                    return xmlItems.map(item => ({
+                        title: item.querySelector("title")?.textContent || "",
+                        link: item.querySelector("link")?.textContent || item.querySelector("guid")?.textContent || "https://news.google.com",
+                        pubDate: item.querySelector("pubDate")?.textContent || ""
+                    }));
+                }
+            } catch (e) { console.warn("Proxy 3 failed", e); }
+
+            return null;
+        }
+
+        async function fetchAndFilterFeedsByKeyword(keyword) {
+            const masterList = [
+                "https://feeds.bbci.co.uk/news/rss.xml",
+                "https://techcrunch.com/feed/",
+                "https://www.theverge.com/rss/index.xml",
+                "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
+            ];
+
+            const terms = keyword.toLowerCase().split(' ');
+            let matchedItems = [];
+
+            for (const feedUrl of masterList) {
+                const feedItems = await fetchRSSViaMultiProxy(feedUrl);
+                if (feedItems && feedItems.length > 0) {
+                    const matches = feedItems.filter(item => {
+                        const fullText = (item.title + ' ' + (item.description || '')).toLowerCase();
+                        return terms.some(term => fullText.includes(term));
+                    });
+                    matchedItems = matchedItems.concat(matches);
+                }
+                if (matchedItems.length >= 8) break;
+            }
+            return matchedItems;
+        }
+
+        function extractSource(item, fallback) {
+            if (item.author && item.author.trim() !== '') return item.author.substring(0, 18).toUpperCase();
+            if (item.source && item.source.title) return item.source.title.substring(0, 18).toUpperCase();
+            try {
+                if (item.link) {
+                    const host = new URL(item.link).hostname.replace('www.', '').split('.')[0];
+                    return host.toUpperCase();
+                }
+            } catch(e){}
+            return fallback;
+        }
+
+        function cleanTitle(title) {
+            if (!title) return '';
+            return title.replace(/\s*-\s*[^-]+$/, '').replace(/<[^>]*>?/gm, '').trim();
+        }
+
+        function cleanUrlDisplay(url) {
+            try {
+                const u = new URL(url);
+                return u.hostname.replace('www.', '') + u.pathname.substring(0, 12) + '...';
+            } catch(e) {
+                return 'link.news';
+            }
+        }
+
+        function fallbackTopicHeadlines(topic) {
+            const cleanTopic = topic.toUpperCase();
+            state.headlines = [
+                { id: 1, text: `Latest developments and global announcements regarding ${topic}`, source: cleanTopic, link: "https://news.google.com", pubDate: "Just now" },
+                { id: 2, text: `Industry leaders and analysts share key updates on ${topic}`, source: "ANALYSIS", link: "https://news.google.com", pubDate: "10m ago" },
+                { id: 3, text: `Breaking news and live discussion around ${topic}`, source: "GLOBAL", link: "https://news.google.com", pubDate: "30m ago" }
+            ];
+        }
+
+        function addManualHeadline() {
+            const titleInput = document.getElementById('manual-title-input');
+            const sourceInput = document.getElementById('manual-source-input');
+            const urlInput = document.getElementById('manual-url-input');
+
+            const text = titleInput.value.trim();
+            if (!text) {
+                showToast("Please enter headline text!");
+                return;
+            }
+
+            const newHead = {
+                id: Date.now(),
+                text: text,
+                source: (sourceInput.value.trim() || "LIVE").toUpperCase(),
+                link: urlInput.value.trim() || "https://news.google.com",
+                pubDate: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+            };
+
+            state.headlines.unshift(newHead);
+            titleInput.value = '';
+            sourceInput.value = '';
+            urlInput.value = '';
+
+            renderHeadlinesList();
+            updateSettings();
+            showToast("Manual headline added!");
+        }
+
+        function renderHeadlinesList() {
+            const listEl = document.getElementById('headlines-editor-list');
+            const countBadge = document.getElementById('headline-count-badge');
+            if (!listEl) return;
+
+            if (countBadge) countBadge.innerText = `${state.headlines.length} Items`;
+            listEl.innerHTML = '';
+
+            state.headlines.forEach((item, idx) => {
+                const card = document.createElement('div');
+                card.className = "bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2";
+                card.innerHTML = `
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-[10px] font-bold text-slate-500 font-mono">#${idx + 1} • ${escapeHtml(item.pubDate)}</span>
+                        <span class="text-[10px] font-bold text-amber-400 font-mono uppercase bg-slate-900 px-2 py-0.5 rounded border border-slate-800">${escapeHtml(item.source)}</span>
+                        
+                        <a href="${escapeHtml(item.link)}" target="_blank" rel="noopener" class="text-[11px] font-bold text-emerald-400 hover:text-emerald-300 transition flex items-center gap-1 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded ml-auto">
+                            <span>Open Post</span>
+                            <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i>
+                        </a>
+
+                        <button onclick="removeHeadline(${idx})" class="text-slate-500 hover:text-red-400 transition text-xs ml-1">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                    <div class="text-xs font-semibold text-slate-200 line-clamp-2">${escapeHtml(item.text)}</div>
+                    <div class="text-[10px] text-slate-500 font-mono truncate">URL: ${escapeHtml(item.link)}</div>
+                `;
+                listEl.appendChild(card);
+            });
+        }
+
+        function removeHeadline(idx) {
+            state.headlines.splice(idx, 1);
+            renderHeadlinesList();
+            updateSettings();
+        }
+
+        // -------------------------------------------------------------
+        // LAYOUT, QR ZOOM & SETTINGS LOGIC
+        // -------------------------------------------------------------
+        function toggleQRZoom() {
+            state.qrZoom = !state.qrZoom;
+            const label = document.getElementById('qrzoom-btn-label');
+            const btn = document.getElementById('btn-toggle-qrzoom');
+
+            if (state.qrZoom) {
+                if (label) label.innerText = "Exit Zoom QR Mode";
+                if (btn) btn.className = "p-2.5 rounded-lg border border-emerald-500 bg-emerald-950 text-xs font-bold text-emerald-300 transition flex items-center justify-center gap-1.5 shadow";
+                showToast("Enlarged QR Projection Enabled!");
+            } else {
+                if (label) label.innerText = "Enlarge / Zoom QR";
+                if (btn) btn.className = "p-2.5 rounded-lg border border-amber-500/40 bg-amber-950/40 hover:bg-amber-900/60 text-xs font-bold text-amber-300 transition flex items-center justify-center gap-1.5 shadow";
+            }
+
+            updateSettings();
+        }
+
+        function setLayoutMode(mode) {
+            state.layoutMode = mode;
+            ['lowerthird', 'ticker', 'dual'].forEach(m => {
+                const btn = document.getElementById(`mode-btn-${m}`);
+                if (btn) {
+                    if (m === mode) {
+                        btn.className = "py-2 px-2 text-[11px] font-bold rounded-lg transition bg-red-600 text-white text-center";
+                    } else {
+                        btn.className = "py-2 px-2 text-[11px] font-bold rounded-lg transition text-slate-400 hover:text-white text-center";
+                    }
+                }
+            });
+            updateSettings();
+        }
+
+        function updateSettings() {
+            state.showBreaking = document.getElementById('cfg-breaking').checked;
+            state.showClock = document.getElementById('cfg-showclock').checked;
+            state.showLink = document.getElementById('cfg-showlink').checked;
+            state.showQR = document.getElementById('cfg-showqr').checked;
+            state.accentColor = document.getElementById('cfg-color-accent').value;
+            document.getElementById('cfg-color-accent-hex').value = state.accentColor;
+            state.categoryLabel = document.getElementById('cfg-category-label').value;
+            state.speed = parseInt(document.getElementById('cfg-speed').value);
+            state.fontStyle = document.getElementById('cfg-font').value;
+
+            // Streamer.bot settings update
+            const sbAutoEl = document.getElementById('sb-autopost-toggle');
+            if (sbAutoEl) state.sbAutoPost = sbAutoEl.checked;
+            const sbPlatEl = document.getElementById('sb-target-platform');
+            if (sbPlatEl) state.sbPlatform = sbPlatEl.value;
+            const sbTplEl = document.getElementById('sb-msg-template');
+            if (sbTplEl) state.sbMsgTemplate = sbTplEl.value;
+
+            // Re-render Preview Overlay
+            const previewContainer = document.getElementById('preview-overlay-render');
+            renderOverlayMarkup(previewContainer);
+
+            if (state.layoutMode === 'lowerthird' || state.layoutMode === 'dual') {
+                startHeadlineRotation();
+            }
+
+            generateOBSUrl();
+        }
+
+        function applyPreset(type) {
+            if (type === 'cnn') {
+                state.layoutMode = 'lowerthird';
+                state.showBreaking = true;
+                state.showClock = true;
+                state.showLink = true;
+                state.showQR = true;
+                state.accentColor = '#dc2626';
+                state.categoryLabel = 'BREAKING NEWS';
+                state.fontStyle = 'font-sans';
+            } else if (type === 'cyber') {
+                state.layoutMode = 'dual';
+                state.showBreaking = true;
+                state.showClock = true;
+                state.showLink = true;
+                state.showQR = true;
+                state.accentColor = '#06b6d4';
+                state.categoryLabel = 'CYBER FEED';
+                state.fontStyle = 'font-tech';
+            } else if (type === 'darkmodern') {
+                state.layoutMode = 'ticker';
+                state.showBreaking = false;
+                state.showClock = true;
+                state.showLink = true;
+                state.showQR = false;
+                state.accentColor = '#10b981';
+                state.categoryLabel = 'LIVE UPDATES';
+                state.fontStyle = 'font-mono';
+            } else if (type === 'minimal') {
+                state.layoutMode = 'ticker';
+                state.showBreaking = false;
+                state.showClock = true;
+                state.showLink = true;
+                state.showQR = false;
+                state.accentColor = '#e2e8f0';
+                state.categoryLabel = 'HEADLINES';
+                state.fontStyle = 'font-sans';
+            }
+
+            document.getElementById('cfg-breaking').checked = state.showBreaking;
+            document.getElementById('cfg-showclock').checked = state.showClock;
+            document.getElementById('cfg-showlink').checked = state.showLink;
+            document.getElementById('cfg-showqr').checked = state.showQR;
+            document.getElementById('cfg-color-accent').value = state.accentColor;
+            document.getElementById('cfg-category-label').value = state.categoryLabel;
+            document.getElementById('cfg-font').value = state.fontStyle;
+
+            setLayoutMode(state.layoutMode);
+        }
+
+        // -------------------------------------------------------------
+        // RENDER OVERLAY WITH ENLARGED SCANNABLE QR CODES
+        // -------------------------------------------------------------
+        function renderOverlayMarkup(container) {
+            if (!container) return;
+
+            const accent = state.accentColor;
+            const fontClass = state.fontStyle;
+            const currentItem = state.headlines[activeHeadlineIndex] || state.headlines[0] || { 
+                text: "Fetching Live News Headlines...", 
+                source: "LIVE", 
+                link: "https://news.google.com" 
+            };
+
+            const tickerHtml = state.headlines.map(h => `
+                <span class="inline-flex items-center mx-6">
+                    <span class="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider mr-2 text-white shadow-sm" style="background-color: ${accent}">
+                        ${escapeHtml(h.source)}
+                    </span>
+                    <span class="text-slate-100 font-bold text-sm md:text-base mr-2">${escapeHtml(h.text)}</span>
+                    ${state.showLink ? `
+                        <a href="${escapeHtml(h.link)}" target="_blank" rel="noopener" class="text-[11px] font-mono font-semibold text-emerald-400 hover:underline flex items-center gap-1 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-700">
+                            <i class="fa-solid fa-link text-[9px]"></i> ${cleanUrlDisplay(h.link)}
+                        </a>
+                    ` : ''}
+                    <i class="fa-solid fa-diamond text-[8px] ml-6 text-slate-500/60"></i>
+                </span>
+            `).join('');
+
+            let htmlMarkup = '';
+
+            // QR Code Side Badge Markup for Enlarged Mode
+            const qrZoomBadgeMarkup = `
+                <div id="qr-zoom-side-modal" class="${state.qrZoom && state.showQR ? 'flex' : 'hidden'} fixed top-12 right-12 z-50 bg-slate-950/95 border-2 border-emerald-400 p-5 rounded-2xl shadow-[0_0_50px_rgba(16,185,129,0.3)] flex-col items-center animate-bounce-short">
+                    <div class="bg-white p-3 rounded-xl shadow-inner border border-slate-300">
+                        <div id="qrcode-canvas-zoom" class="w-[200px] h-[200px] flex items-center justify-center"></div>
+                    </div>
+                    <div class="text-center mt-3">
+                        <div class="text-xs font-black text-emerald-400 tracking-wider uppercase flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-mobile-screen-button text-sm"></i> SCAN WITH PHONE
+                        </div>
+                        <div class="text-[10px] text-slate-300 font-semibold mt-0.5">Read Full Original Article</div>
+                    </div>
+                </div>
+            `;
+
+            if (state.layoutMode === 'lowerthird') {
+                htmlMarkup = `
+                    ${qrZoomBadgeMarkup}
+                    <div class="${fontClass} transition-all duration-300">
+                        <div class="inline-flex items-center shadow-lg rounded-t-lg overflow-hidden">
+                            ${state.showBreaking ? `
+                                <div class="bg-red-600 text-white font-black text-xs px-3 py-1 uppercase tracking-widest flex items-center gap-1.5 animate-pulse">
+                                    <span class="w-2 h-2 rounded-full bg-white animate-ping"></span>
+                                    <span>${escapeHtml(state.categoryLabel)}</span>
+                                </div>
+                            ` : `
+                                <div style="background-color: ${accent}" class="text-white font-extrabold text-xs px-3 py-1 uppercase tracking-wider">
+                                    ${escapeHtml(state.categoryLabel)}
+                                </div>
+                            `}
+                        </div>
+
+                        <div class="glass-broadcast border-l-4 shadow-2xl rounded-b-xl rounded-tr-xl p-4 md:p-6 flex items-center justify-between gap-6 border-t border-white/10" style="border-left-color: ${accent}">
+                            
+                            <!-- Left: Main Headline & Direct Article Link -->
+                            <div class="flex-1 overflow-hidden">
+                                <div class="flex items-center gap-3 mb-1.5">
+                                    <span id="lowerthird-source" class="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                                        <i class="fa-solid fa-satellite text-[10px]"></i>
+                                        <span>${escapeHtml(currentItem.source)}</span>
+                                    </span>
+
+                                    ${state.showLink ? `
+                                        <a id="lowerthird-link" href="${escapeHtml(currentItem.link)}" target="_blank" rel="noopener" class="text-xs font-mono font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 bg-slate-900/90 px-2.5 py-0.5 rounded border border-slate-700/80 transition">
+                                            <span>Original Post 🔗</span>
+                                            <span class="opacity-75 font-normal">(${cleanUrlDisplay(currentItem.link)})</span>
+                                        </a>
+                                    ` : ''}
+                                </div>
+
+                                <div id="lowerthird-text" class="text-lg md:text-2xl font-black text-white leading-snug tracking-tight transition-all duration-300">
+                                    ${escapeHtml(currentItem.text)}
+                                </div>
+                            </div>
+
+                            <!-- Right: ENLARGED STREAM QR CODE (140px Box) -->
+                            <div class="flex items-center gap-5 shrink-0 border-l border-slate-700/60 pl-5">
+                                ${state.showQR ? `
+                                    <div class="text-center bg-white p-2 rounded-xl shadow-2xl border-2 border-slate-900 ring-2 ring-slate-800">
+                                        <div id="qrcode-canvas" class="w-[120px] h-[120px] md:w-[140px] md:h-[140px] flex items-center justify-center"></div>
+                                        <div class="text-[9px] font-black text-slate-950 uppercase tracking-tight mt-1 bg-amber-400 py-0.5 px-1 rounded">
+                                            <i class="fa-solid fa-qrcode mr-1"></i> Scan Article
+                                        </div>
+                                    </div>
+                                ` : ''}
+
+                                ${state.showClock ? `
+                                    <div class="text-right">
+                                        <div class="live-clock-time text-base md:text-xl font-mono font-black text-white tracking-tight">--:--:--</div>
+                                        <div class="text-[9px] font-bold tracking-widest text-slate-400 uppercase">LOCAL TIME</div>
+                                    </div>
+                                ` : ''}
+                            </div>
+
+                        </div>
+                    </div>
+                `;
+            } else if (state.layoutMode === 'ticker') {
+                htmlMarkup = `
+                    ${qrZoomBadgeMarkup}
+                    <div class="${fontClass} w-full glass-broadcast rounded-xl shadow-2xl border border-white/10 overflow-hidden flex items-center">
+                        <div class="shrink-0 flex items-center z-10 shadow-lg">
+                            <div style="background-color: ${accent}" class="text-white font-extrabold text-xs md:text-sm px-4 py-3 uppercase tracking-wider">
+                                ${escapeHtml(state.categoryLabel)}
+                            </div>
+                        </div>
+
+                        <div class="flex-1 overflow-hidden py-3 relative">
+                            <div class="ticker-move flex items-center" style="animation-duration: ${state.speed}s">
+                                ${tickerHtml}
+                                ${tickerHtml}
+                            </div>
+                        </div>
+
+                        ${state.showClock ? `
+                            <div class="shrink-0 bg-slate-900/90 px-4 py-2 border-l border-slate-800 text-center z-10">
+                                <div class="live-clock-time text-xs md:text-sm font-mono font-bold text-white">--:--:--</div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            } else if (state.layoutMode === 'dual') {
+                htmlMarkup = `
+                    ${qrZoomBadgeMarkup}
+                    <div class="${fontClass} space-y-3">
+                        <div class="glass-broadcast border-l-4 shadow-2xl rounded-xl p-4 md:p-5 flex items-center justify-between gap-5 border border-white/10" style="border-left-color: ${accent}">
+                            <div class="flex-1 overflow-hidden">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="bg-red-600 text-white text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-wider animate-pulse">BREAKING</span>
+                                    <span id="lowerthird-source" class="text-xs font-bold uppercase text-amber-400">${escapeHtml(currentItem.source)}</span>
+                                    ${state.showLink ? `
+                                        <a id="lowerthird-link" href="${escapeHtml(currentItem.link)}" target="_blank" rel="noopener" class="text-[11px] font-mono font-bold text-emerald-400 bg-slate-900/90 px-2.5 py-0.5 rounded border border-slate-700">
+                                            Open Post 🔗
+                                        </a>
+                                    ` : ''}
+                                </div>
+                                <div id="lowerthird-text" class="text-base md:text-xl font-black text-white leading-tight">
+                                    ${escapeHtml(currentItem.text)}
+                                </div>
+                            </div>
+
+                            ${state.showQR ? `
+                                <div class="bg-white p-1.5 rounded-xl text-center shrink-0 border-2 border-slate-900">
+                                    <div id="qrcode-canvas" class="w-[110px] h-[110px] flex items-center justify-center"></div>
+                                    <div class="text-[8px] font-black text-slate-900 uppercase tracking-tighter mt-0.5 bg-amber-400 px-1 rounded">Scan Article</div>
+                                </div>
+                            ` : ''}
+                        </div>
+
+                        <div class="w-full glass-broadcast rounded-xl shadow-xl border border-white/10 overflow-hidden flex items-center">
+                            <div class="shrink-0 px-3 py-2 text-[10px] font-black uppercase text-white" style="background-color: ${accent}">
+                                ${escapeHtml(state.categoryLabel)}
+                            </div>
+                            <div class="flex-1 overflow-hidden py-2 relative">
+                                <div class="ticker-move flex items-center" style="animation-duration: ${state.speed}s">
+                                    ${tickerHtml}
+                                    ${tickerHtml}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = htmlMarkup;
+            updateClockDisplay();
+            generateQRCode(currentItem.link);
+        }
+
+        // Render Crisp High-Resolution QR Codes
+        function generateQRCode(url) {
+            setTimeout(() => {
+                const targetUrl = url || "https://news.google.com";
+
+                // Standard QR render
+                const qrContainer = document.getElementById('qrcode-canvas');
+                if (qrContainer && typeof QRCode !== 'undefined') {
+                    qrContainer.innerHTML = '';
+                    const size = qrContainer.clientWidth || 130;
+                    new QRCode(qrContainer, {
+                        text: targetUrl,
+                        width: size,
+                        height: size,
+                        colorDark : "#020617",
+                        colorLight : "#ffffff",
+                        correctLevel : QRCode.CorrectLevel.H
+                    });
+                }
+
+                // Zoom Modal QR render (200px +)
+                const qrZoomContainer = document.getElementById('qrcode-canvas-zoom');
+                if (qrZoomContainer && typeof QRCode !== 'undefined') {
+                    qrZoomContainer.innerHTML = '';
+                    new QRCode(qrZoomContainer, {
+                        text: targetUrl,
+                        width: 200,
+                        height: 200,
+                        colorDark : "#020617",
+                        colorLight : "#ffffff",
+                        correctLevel : QRCode.CorrectLevel.H
+                    });
+                }
+            }, 50);
+        }
+
+        // -------------------------------------------------------------
+        // ROTATION & CLOCK TIMERS
+        // -------------------------------------------------------------
+        function startHeadlineRotation() {
+            if (headlineRotateTimer) clearInterval(headlineRotateTimer);
+            if (state.headlines.length <= 1) return;
+
+            headlineRotateTimer = setInterval(() => {
+                activeHeadlineIndex = (activeHeadlineIndex + 1) % state.headlines.length;
+                const srcEl = document.getElementById('lowerthird-source');
+                const textEl = document.getElementById('lowerthird-text');
+                const linkEl = document.getElementById('lowerthird-link');
+
+                const item = state.headlines[activeHeadlineIndex];
+
+                if (textEl) {
+                    textEl.classList.add('opacity-0');
+                    setTimeout(() => {
+                        if (srcEl) srcEl.innerHTML = `<i class="fa-solid fa-satellite text-[10px]"></i> <span>${escapeHtml(item.source)}</span>`;
+                        if (textEl) {
+                            textEl.innerText = item.text;
+                            textEl.classList.remove('opacity-0');
+                        }
+                        if (linkEl) {
+                            linkEl.href = item.link;
+                            linkEl.innerHTML = `<span>Original Post 🔗</span> <span class="opacity-75 font-normal">(${cleanUrlDisplay(item.link)})</span>`;
+                        }
+                        generateQRCode(item.link);
+
+                        // Auto-broadcast link via Streamer.bot if enabled
+                        if (state.sbAutoPost && item) {
+                            broadcastHeadlineMessageToStreamerBot(item);
+                        }
+                    }, 250);
+                }
+            }, 7000);
+        }
+
+        function startClockUpdater() {
+            setInterval(updateClockDisplay, 1000);
+            updateClockDisplay();
+        }
+
+        function updateClockDisplay() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            document.querySelectorAll('.live-clock-time').forEach(el => {
+                el.innerText = timeStr;
+            });
+        }
+
+        // -------------------------------------------------------------
+        // URL GENERATION FOR OBS STUDIO
+        // -------------------------------------------------------------
+        function generateOBSUrl() {
+            const baseUrl = window.location.origin + window.location.pathname;
+            const params = new URLSearchParams();
+
+            params.set('obs', 'true');
+            params.set('mode', state.layoutMode);
+            params.set('cat', state.activeCategory);
+            if (state.customQuery) params.set('q', encodeURIComponent(state.customQuery));
+            params.set('breaking', state.showBreaking);
+            params.set('clock', state.showClock);
+            params.set('showlink', state.showLink);
+            params.set('showqr', state.showQR);
+            params.set('qrZoom', state.qrZoom);
+            params.set('color', state.accentColor.replace('#', ''));
+            params.set('label', encodeURIComponent(state.categoryLabel));
+            params.set('speed', state.speed);
+            params.set('font', state.fontStyle);
+
+            // Streamer.bot URL params
+            params.set('sbUrl', encodeURIComponent(state.sbUrl));
+            params.set('sbAuto', state.sbAutoPost);
+            params.set('sbPlat', state.sbPlatform);
+            params.set('sbTpl', encodeURIComponent(state.sbMsgTemplate));
+
+            const fullObsUrl = `${baseUrl}?${params.toString()}`;
+            
+            const urlInput = document.getElementById('obs-generated-url');
+            if (urlInput) urlInput.value = fullObsUrl;
+
+            const standaloneBtn = document.getElementById('btn-test-standalone');
+            if (standaloneBtn) standaloneBtn.href = fullObsUrl;
+        }
+
+        function copyOBSUrl() {
+            const urlInput = document.getElementById('obs-generated-url');
+            if (!urlInput) return;
+
+            urlInput.select();
+            document.execCommand('copy');
+            showToast("OBS Link copied to clipboard! Ready to paste into OBS Browser Source.");
+        }
+
+        function setPreviewBg(type) {
+            const screen = document.getElementById('simulated-obs-screen');
+            const bgGame = document.getElementById('bg-btn-game');
+            const bgGrid = document.getElementById('bg-btn-grid');
+
+            if (type === 'game') {
+                screen.style.backgroundImage = "url('https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1200&q=80')";
+                bgGame.className = "px-2.5 py-1 text-[11px] font-semibold rounded bg-slate-800 text-white";
+                bgGrid.className = "px-2.5 py-1 text-[11px] font-semibold rounded text-slate-400 hover:text-white";
+            } else {
+                screen.style.backgroundImage = "none";
+                screen.style.backgroundColor = "#020617";
+                bgGrid.className = "px-2.5 py-1 text-[11px] font-semibold rounded bg-slate-800 text-white";
+                bgGame.className = "px-2.5 py-1 text-[11px] font-semibold rounded text-slate-400 hover:text-white";
+            }
+        }
+
+        function toggleDashboardPreviewFullScreen() {
+            const canvas = document.getElementById('preview-canvas-container');
+            if (!document.fullscreenElement) {
+                canvas.requestFullscreen().catch(err => console.error(err));
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast-message');
+            const toastText = document.getElementById('toast-text');
+            toastText.innerText = msg;
+            
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3000);
+        }
+
+        function escapeHtml(str) {
+            return String(str || '')
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>
