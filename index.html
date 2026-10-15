@@ -255,7 +255,7 @@
                             </div>
 
                             <p class="text-[11px] text-slate-300 leading-relaxed">
-                                Connect to Streamer.bot's built-in WebSocket server to automatically post live article links into Twitch, YouTube, or Kick chat whenever news updates on screen.
+                                Connect to Streamer.bot's WebSocket server to automatically post live article links into your chat. Ensure Streamer.bot has the WebSocket Server enabled under <strong>Servers &rarr; Websocket Server</strong>.
                             </p>
 
                             <div class="space-y-3">
@@ -267,6 +267,18 @@
                                             Connect
                                         </button>
                                     </div>
+                                    <p id="mixed-content-warning" class="hidden text-[10px] text-amber-400 mt-1">
+                                        <i class="fa-solid fa-triangle-exclamation"></i> Warning: If this page is loaded via HTTPS, browser security may block insecure ws:// connections. Try running locally on HTTP.
+                                    </p>
+                                </div>
+
+                                <!-- Streamer.bot Action Name -->
+                                <div>
+                                    <label class="block text-[11px] font-bold text-slate-300 mb-1">
+                                        Streamer.bot Action Name 
+                                        <span class="text-[10px] text-slate-500 font-normal ml-1">(Must match action in Streamer.bot)</span>
+                                    </label>
+                                    <input type="text" id="sb-action-name" value="Send News Article Link" oninput="updateSettings()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-purple-200 font-mono focus:outline-none focus:border-purple-500">
                                 </div>
 
                                 <!-- Auto-Post Toggle Switch -->
@@ -305,6 +317,19 @@
                                 <button onclick="triggerStreamerBotTest()" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-purple-300 border border-purple-500/30 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2">
                                     <i class="fa-solid fa-paper-plane"></i> Send Test Message to Streamer.bot
                                 </button>
+                            </div>
+                        </div>
+
+                        <!-- WebSocket Debug Console -->
+                        <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                                    <i class="fa-solid fa-terminal text-purple-400"></i> Live WebSocket Console & Logs
+                                </span>
+                                <button onclick="clearSBLogs()" class="text-[10px] text-slate-500 hover:text-slate-300 underline">Clear</button>
+                            </div>
+                            <div id="sb-debug-log" class="w-full h-32 bg-slate-900 font-mono text-[10px] text-slate-300 p-2.5 rounded-lg border border-slate-800 overflow-y-auto space-y-1">
+                                <div class="text-slate-500">[System] Ready to connect to Streamer.bot WebSocket server...</div>
                             </div>
                         </div>
 
@@ -623,6 +648,7 @@
             headlines: [],
             // Streamer.bot state
             sbUrl: 'ws://127.0.0.1:8080/',
+            sbActionName: 'Send News Article Link',
             sbAutoPost: true,
             sbPlatform: 'Twitch',
             sbMsgTemplate: '📰 [NEWS] {title} — Read full article: {url}'
@@ -643,16 +669,37 @@
             } else {
                 initDashboard();
             }
+
+            // Check Mixed Content risk
+            if (window.location.protocol === 'https:') {
+                const warnEl = document.getElementById('mixed-content-warning');
+                if (warnEl) warnEl.classList.remove('hidden');
+            }
         });
 
         // -------------------------------------------------------------
-        // STREAMER.BOT WEBSOCKET CLIENT
+        // STREAMER.BOT WEBSOCKET CLIENT & DEBUGGER
         // -------------------------------------------------------------
+        function logSB(msg, type = 'info') {
+            const logBox = document.getElementById('sb-debug-log');
+            if (!logBox) return;
+            const timeStr = new Date().toLocaleTimeString();
+            const colorClass = type === 'error' ? 'text-red-400' : type === 'success' ? 'text-emerald-400' : 'text-slate-300';
+            logBox.innerHTML += `<div class="${colorClass}">[${timeStr}] ${escapeHtml(msg)}</div>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function clearSBLogs() {
+            const logBox = document.getElementById('sb-debug-log');
+            if (logBox) logBox.innerHTML = '';
+        }
+
         function connectStreamerBot() {
             const urlInput = document.getElementById('sb-ws-url');
             if (urlInput) state.sbUrl = urlInput.value.trim() || 'ws://127.0.0.1:8080/';
 
             updateSBStatusBadge('connecting');
+            logSB(`Attempting connection to ${state.sbUrl}...`);
 
             try {
                 if (sbSocket) sbSocket.close();
@@ -661,23 +708,35 @@
                 sbSocket.onopen = () => {
                     sbConnected = true;
                     updateSBStatusBadge('connected');
+                    logSB("Connected successfully to Streamer.bot WebSocket server!", "success");
                     showToast("Connected to Streamer.bot WebSocket Server!");
                 };
 
-                sbSocket.onclose = () => {
+                sbSocket.onclose = (e) => {
                     sbConnected = false;
                     updateSBStatusBadge('disconnected');
+                    logSB(`WebSocket connection closed (Code: ${e.code}). Ensure Streamer.bot Websocket Server is running.`, "error");
                 };
 
                 sbSocket.onerror = (err) => {
                     sbConnected = false;
                     updateSBStatusBadge('disconnected');
-                    console.warn("Streamer.bot WS Error:", err);
+                    logSB("WebSocket error encountered. Check if ws:// URL or port 8080 is correct and not blocked.", "error");
+                };
+
+                sbSocket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        logSB(`Received response from SB: ${JSON.stringify(data)}`, "info");
+                    } catch (e) {
+                        logSB(`Received: ${event.data}`, "info");
+                    }
                 };
 
             } catch (e) {
                 sbConnected = false;
                 updateSBStatusBadge('disconnected');
+                logSB(`Exception connecting: ${e.message}`, "error");
             }
         }
 
@@ -711,19 +770,23 @@
         }
 
         function broadcastHeadlineMessageToStreamerBot(headline) {
-            if (!sbSocket || sbSocket.readyState !== WebSocket.OPEN) return;
+            if (!sbSocket || sbSocket.readyState !== WebSocket.OPEN) {
+                logSB(`Cannot send message: WebSocket is not connected.`, "error");
+                return;
+            }
 
+            const actionName = document.getElementById('sb-action-name')?.value.trim() || state.sbActionName;
             const msgText = state.sbMsgTemplate
                 .replace('{title}', headline.text || '')
                 .replace('{source}', headline.source || '')
                 .replace('{url}', headline.link || '')
                 .replace('{category}', state.categoryLabel || '');
 
-            // Construct Streamer.bot DoAction / SendMessage payload
+            // Construct Streamer.bot DoAction payload
             const payload = {
                 request: "DoAction",
                 action: {
-                    name: "Send News Article Link"
+                    name: actionName
                 },
                 args: {
                     newsTitle: headline.text,
@@ -735,12 +798,18 @@
                 id: "obs-news-overlay-" + Date.now()
             };
 
-            sbSocket.send(JSON.stringify(payload));
+            try {
+                sbSocket.send(JSON.stringify(payload));
+                logSB(`Sent action "${actionName}" to Streamer.bot for: "${headline.text.substring(0, 35)}..."`, "success");
+            } catch (e) {
+                logSB(`Failed to send payload: ${e.message}`, "error");
+            }
         }
 
         function triggerStreamerBotTest() {
             if (!sbConnected) {
                 showToast("Please connect to Streamer.bot first!");
+                logSB("Test aborted: WebSocket not connected.", "error");
                 return;
             }
 
@@ -1157,6 +1226,8 @@
             if (sbPlatEl) state.sbPlatform = sbPlatEl.value;
             const sbTplEl = document.getElementById('sb-msg-template');
             if (sbTplEl) state.sbMsgTemplate = sbTplEl.value;
+            const sbActionEl = document.getElementById('sb-action-name');
+            if (sbActionEl) state.sbActionName = sbActionEl.value;
 
             // Re-render Preview Overlay
             const previewContainer = document.getElementById('preview-overlay-render');
@@ -1512,6 +1583,7 @@
             params.set('sbAuto', state.sbAutoPost);
             params.set('sbPlat', state.sbPlatform);
             params.set('sbTpl', encodeURIComponent(state.sbMsgTemplate));
+            params.set('sbAction', encodeURIComponent(state.sbActionName));
 
             const fullObsUrl = `${baseUrl}?${params.toString()}`;
             
